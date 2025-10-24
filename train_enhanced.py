@@ -105,12 +105,16 @@ def train_stage1_enhanced(num_episodes: int = 1600,
         episode_reward = 0
         episode_loss = []
         last_print_step = 0  # Track for progress printing
-        
+
         # Timing diagnostics (optional - remove for production)
         time_encoding = 0
         time_action = 0
         time_env = 0
         time_train = 0
+
+        # OPTIMIZATION: Cache graph encoding to avoid redundant encoding
+        # Encode initial state once
+        cached_graph_data = agent.graph_encoder.encode(state, env.world_state, agent_idx=0)
 
         for step in range(config.MAX_EPISODE_STEPS):
             # Show progress for slow episodes (every 50 steps)
@@ -120,18 +124,18 @@ def train_stage1_enhanced(num_episodes: int = 1600,
                       f"Mem: {len(agent.memory)} | "
                       f"Time/step: {(time.time()-episode_start_time)/step:.3f}s", end='\r')
                 last_print_step = step
-                
-            # Encode state to graph
+
+            # OPTIMIZATION: Reuse cached encoding from previous step
             t0 = time.time()
-            graph_data = agent.graph_encoder.encode(state, env.world_state, agent_idx=0)
+            graph_data = cached_graph_data  # No encoding needed!
             time_encoding += time.time() - t0
 
-            # Select action (reset memory on first step for enhanced agent)
+            # Select action (OPTIMIZED: pass pre-encoded graph to avoid redundant encoding)
             t0 = time.time()
             if step == 0:
-                action = agent.select_action(state, env.world_state, reset_memory=True)
+                action = agent.select_action_from_graph(graph_data, reset_memory=True)
             else:
-                action = agent.select_action(state, env.world_state, reset_memory=False)
+                action = agent.select_action_from_graph(graph_data, reset_memory=False)
             time_action += time.time() - t0
 
             # Step environment
@@ -140,7 +144,7 @@ def train_stage1_enhanced(num_episodes: int = 1600,
             time_env += time.time() - t0
             episode_reward += reward
 
-            # Store transition
+            # Encode next state (this becomes cached for next iteration)
             next_graph_data = agent.graph_encoder.encode(next_state, env.world_state, agent_idx=0)
             agent.store_transition(graph_data, action, reward, next_graph_data, done, info)
 
@@ -152,7 +156,9 @@ def train_stage1_enhanced(num_episodes: int = 1600,
                 if loss is not None:
                     episode_loss.append(loss)
 
+            # OPTIMIZATION: Cache next encoding for reuse
             state = next_state
+            cached_graph_data = next_graph_data
 
             if done:
                 break
