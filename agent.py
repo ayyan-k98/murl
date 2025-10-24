@@ -117,6 +117,38 @@ class CoverageAgent:
 
         return action
 
+    def select_action_from_graph(self, graph_data, epsilon: Optional[float] = None) -> int:
+        """
+        OPTIMIZED: Select action from pre-encoded graph (avoids redundant encoding).
+
+        Args:
+            graph_data: Pre-encoded graph data
+            epsilon: Override default epsilon
+
+        Returns:
+            action: Integer action [0-8]
+        """
+        if epsilon is None:
+            epsilon = self.epsilon
+
+        # Epsilon-greedy
+        if random.random() < epsilon:
+            return random.randint(0, config.N_ACTIONS - 1)
+
+        # Greedy action
+        with torch.no_grad():
+            # Move to device if not already
+            if graph_data.x.device != self.device:
+                graph_data = graph_data.to(self.device)
+
+            # Forward pass
+            q_values = self.policy_net(graph_data)
+
+            # Select best action
+            action = q_values.argmax(dim=1).item()
+
+        return action
+
     def store_transition(self, state, action, reward, next_state, done, info):
         """Store transition in replay memory."""
         self.memory.push(state, action, reward, next_state, done, info)

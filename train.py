@@ -83,7 +83,7 @@ def train_stage1(num_episodes: int = 1600,
         # Get phase-specific epsilon parameters from curriculum
         epsilon_floor = curriculum.get_epsilon_floor(episode)
         epsilon_decay = curriculum.get_epsilon_decay(episode)
-        
+
         # Enforce epsilon floor (minimum exploration)
         if agent.epsilon < epsilon_floor:
             agent.set_epsilon(epsilon_floor)
@@ -98,7 +98,7 @@ def train_stage1(num_episodes: int = 1600,
         # Episode loop
         episode_reward = 0
         episode_loss = []
-        
+
         # Timing breakdown (only for first few episodes to diagnose bottlenecks)
         enable_timing = config.ENABLE_TIMING_BREAKDOWN and episode < 5
         time_encoding = 0 if enable_timing else None
@@ -106,18 +106,22 @@ def train_stage1(num_episodes: int = 1600,
         time_env = 0 if enable_timing else None
         time_train = 0 if enable_timing else None
 
+        # OPTIMIZATION: Cache graph encoding to avoid redundant encoding
+        # Encode initial state once
+        cached_graph_data = agent.graph_encoder.encode(state, env.world_state, agent_idx=0)
+
         for step in range(config.MAX_EPISODE_STEPS):
-            # Encode state to graph
+            # OPTIMIZATION: Reuse cached encoding from previous step
             if enable_timing:
                 t0 = time.time()
-            graph_data = agent.graph_encoder.encode(state, env.world_state, agent_idx=0)
+            graph_data = cached_graph_data  # No encoding needed!
             if enable_timing:
                 time_encoding += time.time() - t0
 
-            # Select action
+            # Select action (OPTIMIZED: pass pre-encoded graph to avoid redundant encoding)
             if enable_timing:
                 t0 = time.time()
-            action = agent.select_action(state, env.world_state)
+            action = agent.select_action_from_graph(graph_data)
             if enable_timing:
                 time_action += time.time() - t0
 
@@ -127,7 +131,7 @@ def train_stage1(num_episodes: int = 1600,
             next_state, reward, done, info = env.step(action)
             episode_reward += reward
 
-            # Encode next state
+            # Encode next state (this becomes cached for next iteration)
             next_graph_data = agent.graph_encoder.encode(next_state, env.world_state, agent_idx=0)
             if enable_timing:
                 time_env += time.time() - t0
@@ -146,7 +150,9 @@ def train_stage1(num_episodes: int = 1600,
                     episode_loss.append(loss)
                     metrics.add_loss(loss)
 
+            # OPTIMIZATION: Cache next encoding for reuse
             state = next_state
+            cached_graph_data = next_graph_data
 
             if done:
                 break
