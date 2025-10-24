@@ -230,16 +230,20 @@ class EnhancedCoverageAgent:
         # Note: For recurrent network, we process each transition independently
         # (not maintaining temporal continuity in batch - approximation)
         # OPTIMIZED: Batch graphs before GPU transfer for speed
+        # NOTE: Graphs from environment are always on CPU, no device check needed
         from torch_geometric.data import Batch
-        
-        batched_states = Batch.from_data_list(list(states)).to(self.device)
+
+        state_graphs = list(states)
+        next_state_graphs = list(next_states)
+
+        batched_states = Batch.from_data_list(state_graphs).to(self.device)
         # Reset recurrent state for each sample (conservative)
         q_values = self.policy_net(batched_states, reset_recurrent=True)  # [batch_size, n_actions]
         q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # [batch_size]
 
         # Compute V(s') for next states using target network
         with torch.no_grad():
-            batched_next_states = Batch.from_data_list(list(next_states)).to(self.device)
+            batched_next_states = Batch.from_data_list(next_state_graphs).to(self.device)
             next_q_values = self.target_net(batched_next_states, reset_recurrent=True)  # [batch_size, n_actions]
             next_q_values = next_q_values.max(dim=1)[0]  # [batch_size]
 

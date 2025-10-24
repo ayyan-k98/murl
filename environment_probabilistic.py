@@ -68,7 +68,7 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
 
     def _update_robot_sensing(self):
         """
-        Update coverage maps (both binary and probabilistic) - OPTIMIZED.
+        Update coverage maps (both binary and probabilistic) - FULLY OPTIMIZED.
 
         Binary map: Used for ground truth metrics
         Probabilistic map: Used for reward calculation
@@ -79,15 +79,17 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
         # OPTIMIZATION: Vectorize probabilistic coverage calculation
         robot_pos = self.robot_state.position
 
-        # Extract free cells efficiently
-        free_cells = [(cell, data) for cell, data in self.robot_state.local_map.items()
-                      if data[1] == "free"]
+        # OPTIMIZED: Use direct iteration (faster than list comprehension for dicts)
+        free_cells = []
+        for cell, (coverage, cell_type) in self.robot_state.local_map.items():
+            if cell_type == "free":
+                free_cells.append(cell)
 
         if len(free_cells) == 0:
             return
 
         # Vectorize distance calculation using NumPy
-        cell_positions = np.array([cell for cell, _ in free_cells])
+        cell_positions = np.array(free_cells, dtype=np.int32)
         dx = cell_positions[:, 0] - robot_pos[0]
         dy = cell_positions[:, 1] - robot_pos[1]
         distances = np.sqrt(dx**2 + dy**2)
@@ -96,10 +98,11 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
         exponents = self.sigmoid_k * (distances - self.sigmoid_r0)
         Pcov_values = 1.0 / (1.0 + np.exp(exponents))
 
-        # Update probabilistic coverage (vectorized)
-        for i, (cell, _) in enumerate(free_cells):
-            current_prob = self.coverage_map_prob[cell[0], cell[1]]
-            self.coverage_map_prob[cell[0], cell[1]] = max(current_prob, Pcov_values[i])
+        # OPTIMIZED: Fully vectorized update using NumPy advanced indexing
+        x_coords = cell_positions[:, 0]
+        y_coords = cell_positions[:, 1]
+        current_probs = self.coverage_map_prob[x_coords, y_coords]
+        self.coverage_map_prob[x_coords, y_coords] = np.maximum(current_probs, Pcov_values)
 
     def _calculate_coverage_gain(self, prev_coverage: np.ndarray) -> int:
         """
@@ -136,8 +139,11 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
         self.steps += 1
 
         # Store previous states
+        # OPTIMIZATION: Only copy coverage_map if needed for metrics
         prev_coverage = self.world_state.coverage_map.copy()
-        prev_coverage_prob = self.coverage_map_prob.copy()
+
+        # OPTIMIZATION: Track only the sum, not full copy (saves 400 float copies per step)
+        prev_prob_sum = self.coverage_map_prob.sum()
         prev_local_map_size = len(self.robot_state.local_map)
 
         # Execute action (movement)
@@ -148,7 +154,11 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
 
         # Calculate gains
         coverage_gain = self._calculate_coverage_gain(prev_coverage)  # Binary (for metrics)
-        prob_gain = self._calculate_probabilistic_coverage_gain(prev_coverage_prob)  # Probabilistic (for reward)
+
+        # OPTIMIZED: Calculate probabilistic gain from sum difference (much faster)
+        current_prob_sum = self.coverage_map_prob.sum()
+        prob_gain = max(0.0, current_prob_sum - prev_prob_sum)
+
         knowledge_gain = len(self.robot_state.local_map) - prev_local_map_size
 
         # Calculate reward (using probabilistic gain!)
