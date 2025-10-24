@@ -183,22 +183,19 @@ class CoverageAgent:
         next_state_graphs = [s for s in next_states]
 
         # OPTIMIZED: Batch graphs before GPU transfer (much faster than individual transfers)
+        # NOTE: Graphs from environment are always on CPU, no device check needed
         from torch_geometric.data import Batch
 
-        # FIX: Ensure all graphs are on CPU before batching to avoid device mismatch
-        state_graphs_cpu = [s.to('cpu') if s.x.device.type != 'cpu' else s for s in state_graphs]
-        next_state_graphs_cpu = [s.to('cpu') if s.x.device.type != 'cpu' else s for s in next_state_graphs]
-
         # Compute Q(s, a) for current states
-        # Batch all graphs together then transfer to device
-        batched_states = Batch.from_data_list(state_graphs_cpu).to(self.device)
+        # Batch all graphs together then transfer to device (graphs are on CPU by default)
+        batched_states = Batch.from_data_list(state_graphs).to(self.device)
         q_values = self.policy_net(batched_states)  # [batch_size, n_actions]
         q_values = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # [batch_size]
 
         # Compute V(s') for next states using target network
         with torch.no_grad():
             # Batch all next state graphs then transfer to device
-            batched_next_states = Batch.from_data_list(next_state_graphs_cpu).to(self.device)
+            batched_next_states = Batch.from_data_list(next_state_graphs).to(self.device)
             next_q_values = self.target_net(batched_next_states)  # [batch_size, n_actions]
             next_q_values = next_q_values.max(dim=1)[0]  # [batch_size]
 
