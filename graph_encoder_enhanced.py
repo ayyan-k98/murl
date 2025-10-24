@@ -158,18 +158,18 @@ class EnhancedGraphStateEncoder:
     def _compute_frontier_score(self,
                                 pos: Tuple[int, int],
                                 local_map: Dict) -> float:
-        """Count unknown neighbors (frontier detection)."""
+        """Count unknown neighbors (frontier detection) - OPTIMIZED."""
         x, y = pos
-        unknown_count = 0
 
-        # Check 8 neighbors
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                neighbor = (x + dx, y + dy)
-                if neighbor not in local_map:
-                    unknown_count += 1
+        # OPTIMIZATION: Pre-defined neighbor offsets (avoid nested loops)
+        neighbors = [
+            (x-1, y-1), (x-1, y), (x-1, y+1),
+            (x, y-1),             (x, y+1),
+            (x+1, y-1), (x+1, y), (x+1, y+1)
+        ]
+
+        # Count unknown neighbors using list comprehension (faster than loop)
+        unknown_count = sum(1 for n in neighbors if n not in local_map)
 
         return unknown_count / 8.0  # Normalize to [0, 1]
 
@@ -178,21 +178,20 @@ class EnhancedGraphStateEncoder:
                                   local_map: Dict,
                                   all_sensed: List[Tuple[int, int]]) -> float:
         """
-        NEW: Compute average coverage of neighboring cells.
+        Compute average coverage of neighboring cells - OPTIMIZED.
         Helps network understand local coverage context.
         """
         x, y = pos
-        neighbor_coverages = []
 
-        # Check 8 neighbors
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                neighbor = (x + dx, y + dy)
-                if neighbor in local_map:
-                    coverage, _ = local_map[neighbor]
-                    neighbor_coverages.append(coverage)
+        # OPTIMIZATION: Pre-defined neighbor offsets (avoid nested loops)
+        neighbors = [
+            (x-1, y-1), (x-1, y), (x-1, y+1),
+            (x, y-1),             (x, y+1),
+            (x+1, y-1), (x+1, y), (x+1, y+1)
+        ]
+
+        # List comprehension for coverage extraction (faster)
+        neighbor_coverages = [local_map[n][0] for n in neighbors if n in local_map]
 
         if len(neighbor_coverages) == 0:
             return 0.0
@@ -204,7 +203,7 @@ class EnhancedGraphStateEncoder:
                                    local_map: Dict,
                                    agent_pos: Tuple[int, int]) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        NEW: Build edges WITH features.
+        Build edges WITH features - OPTIMIZED.
 
         Edge features (3D):
             1. Distance (normalized)
@@ -221,42 +220,43 @@ class EnhancedGraphStateEncoder:
         edges_dst = []
         edge_features = []
 
+        # OPTIMIZATION: Pre-defined 8-neighbor offsets with pre-computed features
+        neighbor_offsets = [
+            (-1, -1, math.sqrt(2), 1.0),  # (dx, dy, distance, is_diagonal)
+            (-1,  0, 1.0, 0.0),
+            (-1,  1, math.sqrt(2), 1.0),
+            ( 0, -1, 1.0, 0.0),
+            ( 0,  1, 1.0, 0.0),
+            ( 1, -1, math.sqrt(2), 1.0),
+            ( 1,  0, 1.0, 0.0),
+            ( 1,  1, math.sqrt(2), 1.0)
+        ]
+
         for pos_src, idx_src in pos_to_idx.items():
             x_src, y_src = pos_src
             coverage_src = local_map.get(pos_src, (0.0, "unknown"))[0]
 
-            # Check 8 neighbors
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
-                    if dx == 0 and dy == 0:
-                        continue
+            # OPTIMIZATION: Iterate pre-defined offsets instead of nested loops
+            for dx, dy, dist, is_diagonal in neighbor_offsets:
+                pos_dst = (x_src + dx, y_src + dy)
 
-                    pos_dst = (x_src + dx, y_src + dy)
+                # Only connect if neighbor is also in sensed cells
+                if pos_dst in pos_to_idx:
+                    # Check not blocked by obstacle
+                    node_type = local_map.get(pos_dst, (0.0, "unknown"))[1]
+                    if node_type != "obstacle":
+                        idx_dst = pos_to_idx[pos_dst]
+                        coverage_dst = local_map.get(pos_dst, (0.0, "unknown"))[0]
 
-                    # Only connect if neighbor is also in sensed cells
-                    if pos_dst in pos_to_idx:
-                        # Check not blocked by obstacle
-                        node_type = local_map.get(pos_dst, (0.0, "unknown"))[1]
-                        if node_type != "obstacle":
-                            idx_dst = pos_to_idx[pos_dst]
-                            coverage_dst = local_map.get(pos_dst, (0.0, "unknown"))[0]
+                        # Add edge
+                        edges_src.append(idx_src)
+                        edges_dst.append(idx_dst)
 
-                            # Add edge
-                            edges_src.append(idx_src)
-                            edges_dst.append(idx_dst)
+                        # Compute edge features (distance already computed!)
+                        norm_dist = dist / 1.414  # Max = sqrt(2) for diagonal
+                        coverage_gradient = coverage_dst - coverage_src
 
-                            # Compute edge features
-                            # 1. Distance
-                            dist = math.sqrt(dx**2 + dy**2)
-                            norm_dist = dist / 1.414  # Max = sqrt(2) for diagonal
-
-                            # 2. Is diagonal
-                            is_diagonal = 1.0 if (dx != 0 and dy != 0) else 0.0
-
-                            # 3. Coverage gradient (directional info)
-                            coverage_gradient = coverage_dst - coverage_src
-
-                            edge_features.append([norm_dist, is_diagonal, coverage_gradient])
+                        edge_features.append([norm_dist, is_diagonal, coverage_gradient])
 
         if len(edges_src) == 0:
             # No edges - return self-loop with dummy features

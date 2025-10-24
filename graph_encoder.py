@@ -170,18 +170,18 @@ class GraphStateEncoder:
     def _compute_frontier_score(self,
                                 pos: Tuple[int, int],
                                 local_map: Dict) -> float:
-        """Count unknown neighbors (frontier detection)."""
+        """Count unknown neighbors (frontier detection) - OPTIMIZED."""
         x, y = pos
-        unknown_count = 0
 
-        # Check 8 neighbors
-        for dx in [-1, 0, 1]:
-            for dy in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                neighbor = (x + dx, y + dy)
-                if neighbor not in local_map:
-                    unknown_count += 1
+        # OPTIMIZATION: Pre-defined neighbor offsets (avoid nested loops)
+        neighbors = [
+            (x-1, y-1), (x-1, y), (x-1, y+1),
+            (x, y-1),             (x, y+1),
+            (x+1, y-1), (x+1, y), (x+1, y+1)
+        ]
+
+        # Count unknown neighbors using list comprehension (faster than loop)
+        unknown_count = sum(1 for n in neighbors if n not in local_map)
 
         return unknown_count / 8.0  # Normalize to [0, 1]
 
@@ -189,7 +189,7 @@ class GraphStateEncoder:
                      node_positions: List[Tuple[int, int]],
                      local_map: Dict) -> torch.Tensor:
         """
-        Build 8-connected edges between KNOWN cells only.
+        Build 8-connected edges between KNOWN cells only (OPTIMIZED).
         This preserves POMDP: edges only exist between sensed cells.
         """
         pos_to_idx = {pos: idx for idx, pos in enumerate(node_positions)}
@@ -197,24 +197,28 @@ class GraphStateEncoder:
         edges_src = []
         edges_dst = []
 
+        # OPTIMIZATION: Pre-defined 8-neighbor offsets (avoid nested loops)
+        neighbor_offsets = [
+            (-1, -1), (-1, 0), (-1, 1),
+            (0, -1),           (0, 1),
+            (1, -1),  (1, 0),  (1, 1)
+        ]
+
         for pos, idx in pos_to_idx.items():
             x, y = pos
-            # Check 8 neighbors
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
-                    if dx == 0 and dy == 0:
-                        continue
 
-                    neighbor = (x + dx, y + dy)
+            # OPTIMIZATION: Check all 8 neighbors using pre-defined offsets
+            for dx, dy in neighbor_offsets:
+                neighbor = (x + dx, y + dy)
 
-                    # Only connect if neighbor is also in sensed cells
-                    if neighbor in pos_to_idx:
-                        # Check not blocked by obstacle (OPTIMIZED: single lookup)
-                        neighbor_data = local_map.get(neighbor, (0.0, "unknown"))
-                        if neighbor_data[1] != "obstacle":
-                            neighbor_idx = pos_to_idx[neighbor]
-                            edges_src.append(idx)
-                            edges_dst.append(neighbor_idx)
+                # Only connect if neighbor is also in sensed cells
+                if neighbor in pos_to_idx:
+                    # Check not blocked by obstacle (OPTIMIZED: single lookup)
+                    neighbor_data = local_map.get(neighbor, (0.0, "unknown"))
+                    if neighbor_data[1] != "obstacle":
+                        neighbor_idx = pos_to_idx[neighbor]
+                        edges_src.append(idx)
+                        edges_dst.append(neighbor_idx)
 
         if len(edges_src) == 0:
             # No edges - return self-loop

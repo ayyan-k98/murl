@@ -68,30 +68,38 @@ class ProbabilisticCoverageEnvironment(CoverageEnvironment):
 
     def _update_robot_sensing(self):
         """
-        Update coverage maps (both binary and probabilistic).
+        Update coverage maps (both binary and probabilistic) - OPTIMIZED.
 
         Binary map: Used for ground truth metrics
         Probabilistic map: Used for reward calculation
         """
-        # Update robot's local map via ray-cast sensing
+        # Update robot's local map via ray-cast sensing (uses optimized parent method)
         super()._update_robot_sensing()
 
-        # Update probabilistic coverage based on sensed cells
+        # OPTIMIZATION: Vectorize probabilistic coverage calculation
         robot_pos = self.robot_state.position
 
-        for cell, (coverage, cell_type) in self.robot_state.local_map.items():
-            if cell_type == "free":
-                # Calculate distance from robot to cell
-                dx = cell[0] - robot_pos[0]
-                dy = cell[1] - robot_pos[1]
-                distance = math.sqrt(dx**2 + dy**2)
+        # Extract free cells efficiently
+        free_cells = [(cell, data) for cell, data in self.robot_state.local_map.items()
+                      if data[1] == "free"]
 
-                # Calculate coverage probability
-                Pcov = self._calculate_coverage_probability(distance)
+        if len(free_cells) == 0:
+            return
 
-                # Update probabilistic coverage (take maximum)
-                current_prob = self.coverage_map_prob[cell[0], cell[1]]
-                self.coverage_map_prob[cell[0], cell[1]] = max(current_prob, Pcov)
+        # Vectorize distance calculation using NumPy
+        cell_positions = np.array([cell for cell, _ in free_cells])
+        dx = cell_positions[:, 0] - robot_pos[0]
+        dy = cell_positions[:, 1] - robot_pos[1]
+        distances = np.sqrt(dx**2 + dy**2)
+
+        # Vectorize sigmoid calculation
+        exponents = self.sigmoid_k * (distances - self.sigmoid_r0)
+        Pcov_values = 1.0 / (1.0 + np.exp(exponents))
+
+        # Update probabilistic coverage (vectorized)
+        for i, (cell, _) in enumerate(free_cells):
+            current_prob = self.coverage_map_prob[cell[0], cell[1]]
+            self.coverage_map_prob[cell[0], cell[1]] = max(current_prob, Pcov_values[i])
 
     def _calculate_coverage_gain(self, prev_coverage: np.ndarray) -> int:
         """
